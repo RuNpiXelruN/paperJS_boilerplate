@@ -1,6 +1,6 @@
 
 /* Licensed under the Apache License, Version 2.0. (http://www.apache.org/licenses/LICENSE-2.0). Copyright 2015-2016 William Ngan. (https://github.com/williamngan/pt/) */
-var CanvasSpace, Circle, Color, Const, Curve, DOMSpace, Delaunay, Easing, Form, Grid, GridCascade, Line, Matrix, Noise, Pair, Particle, ParticleEmitter, ParticleField, ParticleSystem, Point, PointSet, QuadTree, Rectangle, SVGForm, SVGSpace, SamplePoints, Space, StripeBound, Timer, Triangle, UI, Util, Vector,
+var CanvasSpace, Circle, Color, Const, Curve, DOMSpace, Delaunay, Form, Grid, GridCascade, Line, Matrix, Noise, Pair, Particle, ParticleEmitter, ParticleField, ParticleSystem, Point, PointSet, QuadTree, Rectangle, SVGForm, SVGSpace, SamplePoints, Shaping, Space, StripeBound, Timer, Triangle, UI, Util, Vector,
   bind = function(fn, me){ return function(){ return fn.apply(me, arguments); }; },
   extend = function(child, parent) { for (var key in parent) { if (hasProp.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; },
   hasProp = {}.hasOwnProperty,
@@ -380,6 +380,13 @@ Util = (function() {
     return Const.gaussian * Math.exp(-0.5 * x * x) / sigma;
   };
 
+  Util.mapToRange = function(n, min1, max1, min2, max2) {
+    if (min1 === max1) {
+      throw "[min1, max1] must be a non-degenerate interval (that is, min1 != max1)";
+    }
+    return ((n - min1) / (max1 - min1)) * (max2 - min2) + min2;
+  };
+
   return Util;
 
 })();
@@ -441,8 +448,9 @@ this.Timer = Timer;
 
 Space = (function() {
   function Space(id) {
-    if (id == null) {
-      id = 'space';
+    if (typeof id !== 'string' || id.length === 0) {
+      throw "id parameter is not valid";
+      return false;
     }
     this.id = id;
     this.size = new Vector();
@@ -714,19 +722,15 @@ this.Space = Space;
 CanvasSpace = (function(superClass) {
   extend(CanvasSpace, superClass);
 
-  function CanvasSpace(id, bgcolor, context) {
-    if (id == null) {
-      id = 'pt_space';
-    }
-    if (bgcolor == null) {
-      bgcolor = false;
-    }
-    if (context == null) {
-      context = '2d';
-    }
+  function CanvasSpace(elem, callback) {
     this._resizeHandler = bind(this._resizeHandler, this);
-    CanvasSpace.__super__.constructor.apply(this, arguments);
-    this.space = document.querySelector("#" + this.id);
+    var _existed, _selector, b, isElement;
+    if (!elem) {
+      elem = 'pt';
+    }
+    isElement = elem instanceof Element;
+    CanvasSpace.__super__.constructor.call(this, isElement ? "pt_custom_space" : elem);
+    this.space = null;
     this.bound = null;
     this.boundRect = {
       top: 0,
@@ -735,51 +739,83 @@ CanvasSpace = (function(superClass) {
       height: 0
     };
     this.pixelScale = 1;
-    this.appended = true;
-    if (!this.space) {
-      this.space = document.createElement("canvas");
-      this.space.setAttribute("id", this.id);
-      this.appended = false;
+    this._autoResize = true;
+    _selector = null;
+    if (isElement) {
+      _selector = elem;
+    } else {
+      this.id = this.id[0] === "#" ? this.id.substr(1) : this.id;
+      _selector = document.querySelector("#" + this.id);
+      _existed = true;
+    }
+    if (!_selector) {
+      this.bound = this._createElement("div", this.id + "_container");
+      this.space = this._createElement("canvas", this.id);
+      this.bound.appendChild(this.space);
+      document.body.appendChild(this.bound);
+      _existed = false;
+    } else if (_selector.nodeName.toLowerCase() !== "canvas") {
+      this.bound = _selector;
+      this.space = this._createElement("canvas", this.id + "_canvas");
+      this.bound.appendChild(this.space);
+    } else {
+      this.space = _selector;
+      this.bound = this.space.parentElement;
+    }
+    if (_existed) {
+      b = this.bound.getBoundingClientRect();
+      this.resize(b.width, b.height);
     }
     this._mdown = false;
     this._mdrag = false;
-    this.bgcolor = bgcolor;
-    this.ctx = this.space.getContext(context);
+    setTimeout(this._ready.bind(this, callback), 50);
+    this.bgcolor = "#F3F7FA";
+    this.ctx = this.space.getContext('2d');
   }
 
-  CanvasSpace.prototype.display = function(parent_id, readyCallback, devicePixelSupport) {
-    var r1, r2;
-    if (parent_id == null) {
-      parent_id = "#pt";
+  CanvasSpace.prototype._createElement = function(elem, id) {
+    var d;
+    if (elem == null) {
+      elem = "div";
     }
-    if (devicePixelSupport == null) {
-      devicePixelSupport = true;
-    }
-    if (!this.appended) {
-      this.bound = document.querySelector(parent_id);
+    d = document.createElement(elem);
+    d.setAttribute("id", id);
+    return d;
+  };
+
+  CanvasSpace.prototype._ready = function(callback) {
+    if (this.bound) {
       this.boundRect = this.bound.getBoundingClientRect();
-      this.pixelScale = 1;
-      if (devicePixelSupport) {
-        r1 = window.devicePixelRatio || 1;
-        r2 = this.ctx.webkitBackingStorePixelRatio || this.ctx.mozBackingStorePixelRatio || this.ctx.msBackingStorePixelRatio || this.ctx.oBackingStorePixelRatio || this.ctx.backingStorePixelRatio || 1;
-        this.pixelScale = r1 / r2;
+      this.resize(this.boundRect.width, this.boundRect.height);
+      this.autoResize(this._autoResize);
+      if (this.bgcolor) {
+        this.clear(this.bgcolor);
       }
-      if (this.bound) {
-        this.resize(this.boundRect.width, this.boundRect.height);
-        this.autoResize(true);
-        if (this.space.parentNode !== this.bound) {
-          this.bound.appendChild(this.space);
-        }
-        this.appended = true;
-        setTimeout((function() {
-          this.space.dispatchEvent(new Event('ready'));
-          if (readyCallback) {
-            return readyCallback(this.boundRect.width, this.boundRect.height, this.space);
-          }
-        }).bind(this));
-      } else {
-        throw 'Cannot add canvas to element ' + parent_id;
+      this.space.dispatchEvent(new Event('ready'));
+      if (callback && typeof callback === "function") {
+        return callback(this.boundRect, this.space);
       }
+    } else {
+      throw "Cannot initiate #" + this.id + " element";
+    }
+  };
+
+  CanvasSpace.prototype.display = function() {
+    console.warn("space.display(...) function is deprecated as of version 0.2.0. You can now set the canvas element in the constructor. Please see the release note for details.");
+    return this;
+  };
+
+  CanvasSpace.prototype.setup = function(opt) {
+    var r1, r2;
+    if (opt.bgcolor !== void 0) {
+      this.bgcolor = opt.bgcolor;
+    }
+    this._autoResize = opt.resize !== false ? true : false;
+    this.pixelScale = 1;
+    if (opt.retina !== false) {
+      r1 = window.devicePixelRatio || 1;
+      r2 = this.ctx.webkitBackingStorePixelRatio || this.ctx.mozBackingStorePixelRatio || this.ctx.msBackingStorePixelRatio || this.ctx.oBackingStorePixelRatio || this.ctx.backingStorePixelRatio || 1;
+      this.pixelScale = r1 / r2;
     }
     return this;
   };
@@ -833,7 +869,7 @@ CanvasSpace = (function(superClass) {
       this.bgcolor = bg;
     }
     lastColor = this.ctx.fillStyle;
-    if (this.bgcolor) {
+    if (this.bgcolor && this.bgcolor !== "transparent") {
       this.ctx.fillStyle = this.bgcolor;
       this.ctx.fillRect(0, 0, this.size.x, this.size.y);
     } else {
@@ -870,23 +906,18 @@ this.CanvasSpace = CanvasSpace;
 DOMSpace = (function(superClass) {
   extend(DOMSpace, superClass);
 
-  function DOMSpace(id, bgcolor, context) {
-    if (id == null) {
-      id = 'pt_space';
-    }
-    if (bgcolor == null) {
-      bgcolor = false;
-    }
-    if (context == null) {
-      context = 'html';
+  function DOMSpace(elem, callback, spaceElement) {
+    var _selector, isElement;
+    if (spaceElement == null) {
+      spaceElement = "div";
     }
     this._resizeHandler = bind(this._resizeHandler, this);
-    DOMSpace.__super__.constructor.apply(this, arguments);
-    this.space = document.querySelector("#" + this.id);
-    this.css = {
-      width: "100%",
-      height: "100%"
-    };
+    if (!elem) {
+      elem = 'pt';
+    }
+    isElement = elem instanceof Element;
+    DOMSpace.__super__.constructor.call(this, isElement ? "pt_custom_space" : elem);
+    this.space = null;
     this.bound = null;
     this.boundRect = {
       top: 0,
@@ -894,20 +925,55 @@ DOMSpace = (function(superClass) {
       width: 0,
       height: 0
     };
-    this.appended = true;
-    if (!this.space) {
-      this._createSpaceElement();
+    this.css = {};
+    _selector = null;
+    if (isElement) {
+      _selector = elem;
+    } else {
+      this.id = this.id[0] === "#" ? this.id.substr(1) : this.id;
+      _selector = document.querySelector("#" + this.id);
+    }
+    if (!_selector) {
+      this.space = this._createElement(spaceElement, this.id);
+      document.body.appendChild(this.space);
+      this.bound = this.space.parentElement;
+    } else {
+      this.space = _selector;
+      this.bound = this.space.parentElement;
     }
     this._mdown = false;
     this._mdrag = false;
-    this.bgcolor = bgcolor;
+    setTimeout(this._ready.bind(this, callback), 50);
+    this.bgcolor = false;
     this.ctx = {};
   }
 
-  DOMSpace.prototype._createSpaceElement = function() {
-    this.space = document.createElement("div");
-    this.space.setAttribute("id", this.id);
-    return this.appended = false;
+  DOMSpace.prototype._createElement = function(elem, id) {
+    var d;
+    if (elem == null) {
+      elem = "div";
+    }
+    d = document.createElement(elem);
+    d.setAttribute("id", id);
+    return d;
+  };
+
+  DOMSpace.prototype._ready = function(callback) {
+    if (this.bound) {
+      this.boundRect = this.bound.getBoundingClientRect();
+      this.resize(this.boundRect.width, this.boundRect.height);
+      this.autoResize(this._autoResize);
+      if (this.bgcolor) {
+        this.setCSS("backgroundColor", this.bgcolor);
+      }
+      this.updateCSS();
+      this.space.dispatchEvent(new Event('ready'));
+      if (callback) {
+        return callback(this.boundRect, this.space);
+      }
+    } else {
+      throw "Cannot initiate #" + this.id + " element";
+    }
   };
 
   DOMSpace.prototype.setCSS = function(key, val, isPx) {
@@ -929,48 +995,22 @@ DOMSpace = (function(superClass) {
     return results;
   };
 
-  DOMSpace.prototype.display = function(parent_id, readyCallback) {
-    if (parent_id == null) {
-      parent_id = "#pt";
+  DOMSpace.prototype.display = function() {
+    console.warn("space.display(...) function is deprecated as of version 0.2.0. You can now set the DOM element in the constructor. Please see the release note for details.");
+    return this;
+  };
+
+  DOMSpace.prototype.setup = function(opt) {
+    if (opt.bgcolor !== void 0) {
+      this.bgcolor = opt.bgcolor;
     }
-    if (!this.appended) {
-      this.bound = document.querySelector(parent_id);
-      this.boundRect = this.bound.getBoundingClientRect();
-      if (this.bound) {
-        this.resize(this.boundRect.width, this.boundRect.height);
-        this.autoResize(true);
-        if (this.space.parentNode !== this.bound) {
-          this.bound.appendChild(this.space);
-        }
-        this.appended = true;
-        setTimeout((function() {
-          this.space.dispatchEvent(new Event('ready'));
-          if (readyCallback) {
-            return readyCallback(this.boundRect.width, this.boundRect.height, this.space);
-          }
-        }).bind(this));
-      } else {
-        throw 'Cannot add canvas to element ' + parent_id;
-      }
-    }
+    this._autoResize = opt.resize !== false ? true : false;
     return this;
   };
 
   DOMSpace.prototype._resizeHandler = function(evt) {
     this.boundRect = this.bound.getBoundingClientRect();
     return this.resize(this.boundRect.width, this.boundRect.height, evt);
-  };
-
-  DOMSpace.prototype.autoResize = function(auto) {
-    if (auto == null) {
-      auto = true;
-    }
-    if (auto) {
-      window.addEventListener('resize', this._resizeHandler);
-    } else {
-      window.removeEventListener('resize', this._resizeHandler);
-    }
-    return this;
   };
 
   DOMSpace.prototype.resize = function(w, h, evt) {
@@ -987,8 +1027,34 @@ DOMSpace = (function(superClass) {
     return this;
   };
 
-  DOMSpace.prototype.clear = function() {
-    return this.space.innerHML = "";
+  DOMSpace.prototype.autoResize = function(auto) {
+    if (auto == null) {
+      auto = true;
+    }
+    if (auto) {
+      this.css['width'] = '100%';
+      this.css['height'] = '100%';
+      window.addEventListener('resize', this._resizeHandler);
+    } else {
+      delete this.css['width'];
+      delete this.css['height'];
+      window.removeEventListener('resize', this._resizeHandler);
+    }
+    return this;
+  };
+
+  DOMSpace.prototype.clear = function(bg) {
+    this.setBackground(bg);
+    this.space.innerHML = "";
+    return this;
+  };
+
+  DOMSpace.prototype.setBackground = function(bg) {
+    if (bg) {
+      this.bgcolor = bg;
+      this.setCSS("backgroundColor", this.bgcolor);
+      return this.space.style["backgroundColor"] = this.bgcolor;
+    }
   };
 
   DOMSpace.prototype.animate = function(time) {
@@ -1031,6 +1097,521 @@ DOMSpace = (function(superClass) {
 })(Space);
 
 this.DOMSpace = DOMSpace;
+
+SVGForm = (function() {
+  SVGForm._domId = 0;
+
+  function SVGForm(space) {
+    this.cc = space.ctx || {};
+    this.cc.group = this.cc.group || null;
+    this.cc.groupID = "ptx";
+    this.cc.groupCount = 0;
+    this.cc.currentID = "ptx0";
+    this.cc.style = {
+      fill: "#999",
+      stroke: "#666",
+      "stroke-width": 1,
+      "stroke-linejoin": false,
+      "stroke-linecap": false
+    };
+    this.cc.font = "11px sans-serif";
+    this.cc.fontSize = 11;
+    this.cc.fontFace = "sans-serif";
+  }
+
+  SVGForm.prototype.fill = function(c) {
+    this.cc.style.fill = c ? c : false;
+    return this;
+  };
+
+  SVGForm.prototype.stroke = function(c, width, joint, cap) {
+    this.cc.style.stroke = c ? c : false;
+    if (width) {
+      this.cc.style["stroke-width"] = width;
+    }
+    if (joint) {
+      this.cc.style["stroke-linejoin"] = joint;
+    }
+    if (cap) {
+      this.cc.style["stroke-linecap"] = cap;
+    }
+    return this;
+  };
+
+  SVGForm.prototype.scope = function(group_id, group) {
+    if (group == null) {
+      group = false;
+    }
+    if (group) {
+      this.cc.group = group;
+    }
+    this.cc.groupID = group_id;
+    this.cc.groupCount = 0;
+    this.nextID();
+    return this.cc;
+  };
+
+  SVGForm.prototype.enterScope = function(item) {
+    if (!item || item.animateID === null) {
+      throw "getScope()'s item must be added to a Space, and has an animateID property. Otherwise, use scope() instead.";
+    }
+    return this.scope(SVGForm._scopeID(item));
+  };
+
+  SVGForm.prototype.getScope = function(item) {
+    if (!this._warn1) {
+      console.warn("form.getScope(...) function is deprecated as of version 0.2.0. It is renamed as `enterScope()`.");
+      this._warn1 = true;
+    }
+    return this.enterScope(item);
+  };
+
+  SVGForm.prototype.nextID = function() {
+    this.cc.groupCount++;
+    this.cc.currentID = this.cc.groupID + "-" + this.cc.groupCount;
+    return this.cc.currentID;
+  };
+
+  SVGForm.id = function(ctx) {
+    return ctx.currentID || "p-" + SVGForm._domId++;
+  };
+
+  SVGForm._scopeID = function(item) {
+    return "item-" + item.animateID;
+  };
+
+  SVGForm.style = function(elem, styles) {
+    var k, st, v;
+    st = [];
+    for (k in styles) {
+      v = styles[k];
+      if (!v) {
+        if (k === "fill") {
+          st.push("fill: none");
+        } else if (k === "stroke") {
+          st.push("stroke: none");
+        }
+      } else {
+        st.push(k + ":" + v);
+      }
+    }
+    return DOMSpace.attr(elem, {
+      style: st.join(";")
+    });
+  };
+
+  SVGForm.point = function(ctx, pt, halfsize, fill, stroke, circle) {
+    var elem;
+    if (halfsize == null) {
+      halfsize = 2;
+    }
+    if (fill == null) {
+      fill = true;
+    }
+    if (stroke == null) {
+      stroke = true;
+    }
+    if (circle == null) {
+      circle = false;
+    }
+    elem = SVGSpace.svgElement(ctx.group, (circle ? "circle" : "rect"), SVGForm.id(ctx));
+    if (!elem) {
+      return;
+    }
+    if (circle) {
+      DOMSpace.attr(elem, {
+        cx: pt.x,
+        cy: pt.y,
+        r: halfsize
+      });
+    } else {
+      DOMSpace.attr(elem, {
+        x: pt.x - halfsize,
+        y: pt.y - halfsize,
+        width: halfsize + halfsize,
+        height: halfsize + halfsize
+      });
+    }
+    SVGForm.style(elem, ctx.style);
+    return elem;
+  };
+
+  SVGForm.prototype.point = function(p, halfsize, isCircle) {
+    if (halfsize == null) {
+      halfsize = 2;
+    }
+    if (isCircle == null) {
+      isCircle = false;
+    }
+    this.nextID();
+    SVGForm.point(this.cc, p, halfsize, true, true, isCircle);
+    return this;
+  };
+
+  SVGForm.points = function(ctx, pts, halfsize, fill, stroke, circle) {
+    var p;
+    if (halfsize == null) {
+      halfsize = 2;
+    }
+    if (fill == null) {
+      fill = true;
+    }
+    if (stroke == null) {
+      stroke = true;
+    }
+    if (circle == null) {
+      circle = false;
+    }
+    return (function() {
+      var aa, len1, results;
+      results = [];
+      for (aa = 0, len1 = pts.length; aa < len1; aa++) {
+        p = pts[aa];
+        results.push(SVGForm.point(ctx, p, halfsize, fill, stroke, circle));
+      }
+      return results;
+    })();
+  };
+
+  SVGForm.prototype.points = function(ps, halfsize, isCircle) {
+    var aa, len1, p;
+    if (halfsize == null) {
+      halfsize = 2;
+    }
+    if (isCircle == null) {
+      isCircle = false;
+    }
+    for (aa = 0, len1 = ps.length; aa < len1; aa++) {
+      p = ps[aa];
+      this.point(p, halfsize, isCircle);
+    }
+    return this;
+  };
+
+  SVGForm.line = function(ctx, pair) {
+    var elem;
+    if (!pair.p1) {
+      throw (pair.toString()) + " is not a Pair";
+    }
+    elem = SVGSpace.svgElement(ctx.group, "line", SVGForm.id(ctx));
+    DOMSpace.attr(elem, {
+      x1: pair.x,
+      y1: pair.y,
+      x2: pair.p1.x,
+      y2: pair.p1.y
+    });
+    SVGForm.style(elem, ctx.style);
+    return elem;
+  };
+
+  SVGForm.prototype.line = function(p) {
+    this.nextID();
+    SVGForm.line(this.cc, p);
+    return this;
+  };
+
+  SVGForm.lines = function(ctx, pairs) {
+    var ln;
+    return (function() {
+      var aa, len1, results;
+      results = [];
+      for (aa = 0, len1 = pairs.length; aa < len1; aa++) {
+        ln = pairs[aa];
+        results.push(SVGForm.line(ctx, ln));
+      }
+      return results;
+    })();
+  };
+
+  SVGForm.prototype.lines = function(ps) {
+    var aa, len1, p;
+    for (aa = 0, len1 = ps.length; aa < len1; aa++) {
+      p = ps[aa];
+      this.line(p);
+    }
+    return this;
+  };
+
+  SVGForm.rect = function(ctx, pair, fill, stroke) {
+    var elem, size;
+    if (fill == null) {
+      fill = true;
+    }
+    if (stroke == null) {
+      stroke = true;
+    }
+    if (!pair.p1) {
+      throw "" + (pair.toString() === !a(Pair));
+    }
+    elem = SVGSpace.svgElement(ctx.group, "rect", SVGForm.id(ctx));
+    size = pair.size();
+    DOMSpace.attr(elem, {
+      x: pair.x,
+      y: pair.y,
+      width: size.x,
+      height: size.y
+    });
+    SVGForm.style(elem, ctx.style);
+    return elem;
+  };
+
+  SVGForm.prototype.rect = function(p, checkBounds) {
+    var r;
+    if (checkBounds == null) {
+      checkBounds = true;
+    }
+    this.nextID();
+    r = checkBounds ? p.bounds() : p;
+    SVGForm.rect(this.cc, r);
+    return this;
+  };
+
+  SVGForm.circle = function(ctx, c, fill, stroke) {
+    var elem;
+    if (fill == null) {
+      fill = true;
+    }
+    if (stroke == null) {
+      stroke = false;
+    }
+    elem = SVGSpace.svgElement(ctx.group, "circle", SVGForm.id(ctx));
+    if (!elem) {
+      return;
+    }
+    DOMSpace.attr(elem, {
+      cx: c.x,
+      cy: c.y,
+      r: c.radius
+    });
+    SVGForm.style(elem, ctx.style);
+    return elem;
+  };
+
+  SVGForm.prototype.circle = function(c) {
+    this.nextID();
+    SVGForm.circle(this.cc, c);
+    return this;
+  };
+
+  SVGForm.polygon = function(ctx, pts, closePath, fill, stroke) {
+    var elem, i, points;
+    if (closePath == null) {
+      closePath = true;
+    }
+    if (fill == null) {
+      fill = true;
+    }
+    if (stroke == null) {
+      stroke = true;
+    }
+    elem = SVGSpace.svgElement(ctx.group, (closePath ? "polygon" : "polyline"), SVGForm.id(ctx));
+    if (!elem) {
+      return;
+    }
+    if (pts.length <= 1) {
+      return;
+    }
+    points = (function() {
+      var aa, ref, results;
+      results = [];
+      for (i = aa = 0, ref = pts.length; aa < ref; i = aa += 1) {
+        results.push(pts[i].x + "," + pts[i].y);
+      }
+      return results;
+    })();
+    DOMSpace.attr(elem, {
+      points: points.join(" ")
+    });
+    SVGForm.style(elem, ctx.style);
+    return elem;
+  };
+
+  SVGForm.prototype.polygon = function(ps, closePath) {
+    this.nextID();
+    SVGForm.polygon(this.cc, ps, closePath);
+    return this;
+  };
+
+  SVGForm.triangle = function(ctx, tri, fill, stroke) {
+    if (fill == null) {
+      fill = true;
+    }
+    if (stroke == null) {
+      stroke = false;
+    }
+    return SVGForm.polygon(ctx, tri.toArray());
+  };
+
+  SVGForm.prototype.triangle = function(tri) {
+    this.nextID();
+    SVGForm.triangle(this.cc, tri);
+    return this;
+  };
+
+  SVGForm.curve = function(ctx, pts, closePath) {
+    if (closePath == null) {
+      closePath = false;
+    }
+    return SVGForm.polygon(ctx, pts, closePath);
+  };
+
+  SVGForm.prototype.curve = function(ps, closePath) {
+    if (closePath == null) {
+      closePath = false;
+    }
+    this.nextID();
+    SVGForm.curve(this.cc, ps, closePath);
+    return this;
+  };
+
+  SVGForm.text = function(ctx, pt, txt, maxWidth, dx, dy) {
+    var elem;
+    if (maxWidth == null) {
+      maxWidth = 0;
+    }
+    if (dx == null) {
+      dx = 0;
+    }
+    if (dy == null) {
+      dy = 0;
+    }
+    elem = SVGSpace.svgElement(ctx.group, "text", SVGForm.id(ctx));
+    if (!elem) {
+      return;
+    }
+    DOMSpace.attr(elem, {
+      "pointer-events": "none",
+      x: pt.x,
+      y: pt.y,
+      dx: 0,
+      dy: 0
+    });
+    elem.textContent = txt;
+    SVGForm.style(elem, {
+      fill: ctx.style.fill,
+      stroke: ctx.style.stroke,
+      "font-family": ctx.fontFace || false,
+      "font-size": ctx.fontSize || false
+    });
+    return elem;
+  };
+
+  SVGForm.prototype.text = function(p, txt, maxWidth, xoff, yoff) {
+    if (maxWidth == null) {
+      maxWidth = 1000;
+    }
+    this.nextID();
+    SVGForm.text(this.cc, p, txt, maxWidth, xoff, yoff);
+    return this;
+  };
+
+  SVGForm.prototype.font = function(size, face) {
+    if (face == null) {
+      face = false;
+    }
+    this.cc.fontFace = face;
+    this.cc.fontSize = size;
+    this.cc.font = size + "px " + face;
+    return this;
+  };
+
+  SVGForm.prototype.draw = function(shape) {
+    return this.sketch(shape);
+  };
+
+  SVGForm.prototype.sketch = function(shape) {
+    shape.floor();
+    if (shape instanceof Circle) {
+      SVGForm.circle(this.cc, shape, this.filled, this.stroked);
+    } else if (shape instanceof Rectangle) {
+      SVGForm.rect(this.cc, shape, this.filled, this.stroked);
+    } else if (shape instanceof Triangle) {
+      SVGForm.triangle(this.cc, shape, this.filled, this.stroked);
+    } else if (shape instanceof Line || shape instanceof Pair) {
+      SVGForm.line(this.cc, shape);
+    } else if (shape instanceof PointSet) {
+      SVGForm.polygon(this.cc, shape.points);
+    } else if (shape instanceof Vector || shape instanceof Point) {
+      SVGForm.point(this.cc, shape);
+    }
+    return this;
+  };
+
+  return SVGForm;
+
+})();
+
+this.SVGForm = SVGForm;
+
+SVGSpace = (function(superClass) {
+  extend(SVGSpace, superClass);
+
+  function SVGSpace(id, callback) {
+    var b, s;
+    SVGSpace.__super__.constructor.call(this, id, callback, 'svg');
+    if (this.space.nodeName.toLowerCase() !== "svg") {
+      s = this._createElement("svg", this.id + "_svg");
+      this.space.appendChild(s);
+      this.bound = this.space;
+      this.space = s;
+      b = this.bound.getBoundingClientRect();
+      this.resize(b.width, b.height);
+    }
+  }
+
+  SVGSpace.prototype._createElement = function(elem, id) {
+    var d;
+    if (elem == null) {
+      elem = "svg";
+    }
+    d = document.createElementNS("http://www.w3.org/2000/svg", elem);
+    if (id) {
+      d.setAttribute("id", id);
+    }
+    return d;
+  };
+
+  SVGSpace.svgElement = function(parent, name, id) {
+    var elem;
+    if (!parent || !parent.appendChild) {
+      parent = this.space;
+      if (!parent) {
+        throw "parent parameter needs to be a DOM node";
+      }
+    }
+    elem = document.querySelector("#" + id);
+    if (!elem) {
+      elem = document.createElementNS("http://www.w3.org/2000/svg", name);
+      elem.setAttribute("id", id);
+      elem.setAttribute("class", id.substring(0, id.indexOf("-")));
+      parent.appendChild(elem);
+    }
+    return elem;
+  };
+
+  SVGSpace.prototype.remove = function(item) {
+    var aa, len1, t, temp;
+    temp = this.space.querySelectorAll("." + SVGForm._scopeID(item));
+    for (aa = 0, len1 = temp.length; aa < len1; aa++) {
+      t = temp[aa];
+      t.parentNode.removeChild(t);
+    }
+    delete this.items[item.animateID];
+    return this;
+  };
+
+  SVGSpace.prototype.removeAll = function() {
+    while (this.space.firstChild) {
+      this.space.removeChild(this.space.firstChild);
+      return this;
+    }
+  };
+
+  return SVGSpace;
+
+})(DOMSpace);
+
+this.SVGSpace = SVGSpace;
 
 Form = (function() {
   function Form(space) {
@@ -1247,7 +1828,7 @@ Form = (function() {
     return this;
   };
 
-  Form.prototype.stroke = function(c, width, joint) {
+  Form.prototype.stroke = function(c, width, joint, cap) {
     this.cc.strokeStyle = c ? c : "transparent";
     this.stroked = !!c;
     if (width) {
@@ -1255,6 +1836,9 @@ Form = (function() {
     }
     if (joint) {
       this.cc.lineJoin = joint;
+    }
+    if (cap) {
+      this.cc.lineCap = cap;
     }
     return this;
   };
@@ -1366,6 +1950,14 @@ Form = (function() {
     }
     this.cc.fillText(txt, pos.x, pos.y, maxWidth);
     return this;
+  };
+
+  Form.prototype.scope = function() {
+    return this.cc;
+  };
+
+  Form.prototype.enterScope = function() {
+    return this.cc;
   };
 
   return Form;
@@ -1967,9 +2559,17 @@ Color = (function(superClass) {
   extend(Color, superClass);
 
   function Color(args) {
+    var _args;
     Color.__super__.constructor.apply(this, arguments);
-    this.alpha = arguments.length >= 4 ? Math.min(1, Math.max(arguments[3], 0)) : 1;
-    this.mode = arguments.length >= 5 ? arguments[4] : 'rgb';
+    _args = Array.isArray(arguments[0]) && arguments[0][3] !== void 0 ? arguments[0] : arguments;
+    this.alpha = _args.length >= 4 ? Math.min(1, Math.max(_args[3], 0)) : 1;
+    this.mode = 'rgb';
+    if (arguments.length >= 5) {
+      this.mode = arguments[4];
+    }
+    if (typeof arguments[1] === "string") {
+      this.mode = arguments[1];
+    }
   }
 
   Color.XYZ = {
@@ -2128,6 +2728,10 @@ Color = (function(superClass) {
     c = new Color(this.x, this.y, this.z, this.alpha);
     c.mode = this.mode;
     return c;
+  };
+
+  Color.prototype.toString = function() {
+    return "Color (" + this.mode + " mode): " + this.x + ", " + this.y + ", " + this.z + " " + this.alpha;
   };
 
   Color.RGBtoHSL = function(r, g, b, normalizedInput, normalizedOutput) {
@@ -3656,6 +4260,9 @@ Grid = (function(superClass) {
       this.cell.size.y = y;
       this.rows = Math.floor(size.y / this.cell.size.y);
     }
+    if (this.layout.length < 1) {
+      this.resetLayout();
+    }
     return this;
   };
 
@@ -4593,623 +5200,6 @@ Triangle = (function(superClass) {
 
 this.Triangle = Triangle;
 
-SVGForm = (function() {
-  SVGForm._domId = 0;
-
-  function SVGForm(space) {
-    this.cc = space.ctx || {};
-    this.cc.group = this.cc.group || null;
-    this.cc.groupID = "ptx";
-    this.cc.groupCount = 0;
-    this.cc.currentID = "ptx0";
-    this.cc.style = {
-      fill: "#999",
-      stroke: "#666",
-      "stroke-width": 1,
-      "stroke-linejoin": false,
-      "stroke-linecap": false
-    };
-    this.cc.font = "11px sans-serif";
-    this.cc.fontSize = 11;
-    this.cc.fontFace = "sans-serif";
-  }
-
-  SVGForm.prototype.fill = function(c) {
-    this.cc.style.fill = c ? c : false;
-    return this;
-  };
-
-  SVGForm.prototype.stroke = function(c, width, joint, cap) {
-    this.cc.style.stroke = c ? c : false;
-    if (width) {
-      this.cc.style["stroke-width"] = width;
-    }
-    if (joint) {
-      this.cc.style["stroke-linejoin"] = joint;
-    }
-    if (cap) {
-      this.cc.style["stroke-linecap"] = joint;
-    }
-    return this;
-  };
-
-  SVGForm.prototype.scope = function(group_id, group) {
-    if (group == null) {
-      group = false;
-    }
-    if (group) {
-      this.cc.group = group;
-    }
-    this.cc.groupID = group_id;
-    this.cc.groupCount = 0;
-    this.nextID();
-    return this.cc;
-  };
-
-  SVGForm.prototype.getScope = function(item) {
-    if (!item || item.animateID === null) {
-      throw "getScope()'s item must be added to a Space, and has an animateID property. Otherwise, use scope() instead.";
-    }
-    return this.scope(SVGForm._scopeID(item));
-  };
-
-  SVGForm.prototype.nextID = function() {
-    this.cc.groupCount++;
-    this.cc.currentID = this.cc.groupID + "-" + this.cc.groupCount;
-    return this.cc.currentID;
-  };
-
-  SVGForm.id = function(ctx) {
-    return ctx.currentID || "p-" + SVGForm._domId++;
-  };
-
-  SVGForm._scopeID = function(item) {
-    return "item" + item.animateID;
-  };
-
-  SVGForm.style = function(elem, styles) {
-    var k, st, v;
-    st = [];
-    for (k in styles) {
-      v = styles[k];
-      if (!v) {
-        if (k === "fill") {
-          st.push("fill: none");
-        } else if (k === "stroke") {
-          st.push("stroke: none");
-        }
-      } else {
-        st.push(k + ":" + v);
-      }
-    }
-    return DOMSpace.attr(elem, {
-      style: st.join(";")
-    });
-  };
-
-  SVGForm.point = function(ctx, pt, halfsize, fill, stroke, circle) {
-    var elem;
-    if (halfsize == null) {
-      halfsize = 2;
-    }
-    if (fill == null) {
-      fill = true;
-    }
-    if (stroke == null) {
-      stroke = true;
-    }
-    if (circle == null) {
-      circle = false;
-    }
-    elem = SVGSpace.svgElement(ctx.group, (circle ? "circle" : "rect"), SVGForm.id(ctx));
-    if (!elem) {
-      return;
-    }
-    if (circle) {
-      DOMSpace.attr(elem, {
-        cx: pt.x,
-        cy: pt.y,
-        r: halfsize
-      });
-    } else {
-      DOMSpace.attr(elem, {
-        x: pt.x - halfsize,
-        y: pt.y - halfsize,
-        width: halfsize + halfsize,
-        height: halfsize + halfsize
-      });
-    }
-    SVGForm.style(elem, ctx.style);
-    return elem;
-  };
-
-  SVGForm.prototype.point = function(p, halfsize, isCircle) {
-    if (halfsize == null) {
-      halfsize = 2;
-    }
-    if (isCircle == null) {
-      isCircle = false;
-    }
-    this.nextID();
-    SVGForm.point(this.cc, p, halfsize, true, true, isCircle);
-    return this;
-  };
-
-  SVGForm.points = function(ctx, pts, halfsize, fill, stroke, circle) {
-    var p;
-    if (halfsize == null) {
-      halfsize = 2;
-    }
-    if (fill == null) {
-      fill = true;
-    }
-    if (stroke == null) {
-      stroke = true;
-    }
-    if (circle == null) {
-      circle = false;
-    }
-    return (function() {
-      var aa, len1, results;
-      results = [];
-      for (aa = 0, len1 = pts.length; aa < len1; aa++) {
-        p = pts[aa];
-        results.push(SVGForm.point(ctx, p, halfsize, fill, stroke, circle));
-      }
-      return results;
-    })();
-  };
-
-  SVGForm.prototype.points = function(ps, halfsize, isCircle) {
-    var aa, len1, p;
-    if (halfsize == null) {
-      halfsize = 2;
-    }
-    if (isCircle == null) {
-      isCircle = false;
-    }
-    for (aa = 0, len1 = ps.length; aa < len1; aa++) {
-      p = ps[aa];
-      this.point(p, halfsize, isCircle);
-    }
-    return this;
-  };
-
-  SVGForm.line = function(ctx, pair) {
-    var elem;
-    if (!pair.p1) {
-      throw (pair.toString()) + " is not a Pair";
-    }
-    elem = SVGSpace.svgElement(ctx.group, "line", SVGForm.id(ctx));
-    DOMSpace.attr(elem, {
-      x1: pair.x,
-      y1: pair.y,
-      x2: pair.p1.x,
-      y2: pair.p1.y
-    });
-    SVGForm.style(elem, ctx.style);
-    return elem;
-  };
-
-  SVGForm.prototype.line = function(p) {
-    this.nextID();
-    SVGForm.line(this.cc, p);
-    return this;
-  };
-
-  SVGForm.lines = function(ctx, pairs) {
-    var ln;
-    return (function() {
-      var aa, len1, results;
-      results = [];
-      for (aa = 0, len1 = pairs.length; aa < len1; aa++) {
-        ln = pairs[aa];
-        results.push(SVGForm.line(ctx, ln));
-      }
-      return results;
-    })();
-  };
-
-  SVGForm.prototype.lines = function(ps) {
-    var aa, len1, p;
-    for (aa = 0, len1 = ps.length; aa < len1; aa++) {
-      p = ps[aa];
-      this.line(p);
-    }
-    return this;
-  };
-
-  SVGForm.rect = function(ctx, pair, fill, stroke) {
-    var elem, size;
-    if (fill == null) {
-      fill = true;
-    }
-    if (stroke == null) {
-      stroke = true;
-    }
-    if (!pair.p1) {
-      throw "" + (pair.toString() === !a(Pair));
-    }
-    elem = SVGSpace.svgElement(ctx.group, "rect", SVGForm.id(ctx));
-    size = pair.size();
-    DOMSpace.attr(elem, {
-      x: pair.x,
-      y: pair.y,
-      width: size.x,
-      height: size.y
-    });
-    SVGForm.style(elem, ctx.style);
-    return elem;
-  };
-
-  SVGForm.prototype.rect = function(p, checkBounds) {
-    var r;
-    if (checkBounds == null) {
-      checkBounds = true;
-    }
-    this.nextID();
-    r = checkBounds ? p.bounds() : p;
-    SVGForm.rect(this.cc, r);
-    return this;
-  };
-
-  SVGForm.circle = function(ctx, c, fill, stroke) {
-    var elem;
-    if (fill == null) {
-      fill = true;
-    }
-    if (stroke == null) {
-      stroke = false;
-    }
-    elem = SVGSpace.svgElement(ctx.group, "circle", SVGForm.id(ctx));
-    if (!elem) {
-      return;
-    }
-    DOMSpace.attr(elem, {
-      cx: c.x,
-      cy: c.y,
-      r: c.radius
-    });
-    SVGForm.style(elem, ctx.style);
-    return elem;
-  };
-
-  SVGForm.prototype.circle = function(c) {
-    this.nextID();
-    SVGForm.circle(this.cc, c);
-    return this;
-  };
-
-  SVGForm.polygon = function(ctx, pts, closePath, fill, stroke) {
-    var elem, i, points;
-    if (closePath == null) {
-      closePath = true;
-    }
-    if (fill == null) {
-      fill = true;
-    }
-    if (stroke == null) {
-      stroke = true;
-    }
-    elem = SVGSpace.svgElement(ctx.group, (closePath ? "polygon" : "polyline"), SVGForm.id(ctx));
-    if (!elem) {
-      return;
-    }
-    if (pts.length <= 1) {
-      return;
-    }
-    points = (function() {
-      var aa, ref, results;
-      results = [];
-      for (i = aa = 0, ref = pts.length; aa < ref; i = aa += 1) {
-        results.push(pts[i].x + "," + pts[i].y);
-      }
-      return results;
-    })();
-    DOMSpace.attr(elem, {
-      points: points.join(" ")
-    });
-    SVGForm.style(elem, ctx.style);
-    return elem;
-  };
-
-  SVGForm.prototype.polygon = function(ps, closePath) {
-    this.nextID();
-    SVGForm.polygon(this.cc, ps, closePath);
-    return this;
-  };
-
-  SVGForm.triangle = function(ctx, tri, fill, stroke) {
-    if (fill == null) {
-      fill = true;
-    }
-    if (stroke == null) {
-      stroke = false;
-    }
-    return SVGForm.polygon(ctx, tri.toArray());
-  };
-
-  SVGForm.prototype.triangle = function(tri) {
-    this.nextID();
-    SVGForm.triangle(this.cc, tri);
-    return this;
-  };
-
-  SVGForm.curve = function(ctx, pts, closePath) {
-    if (closePath == null) {
-      closePath = false;
-    }
-    return SVGForm.polygon(ctx, pts, closePath);
-  };
-
-  SVGForm.prototype.curve = function(ps, closePath) {
-    if (closePath == null) {
-      closePath = false;
-    }
-    this.nextID();
-    SVGForm.curve(this.cc, ps, closePath);
-    return this;
-  };
-
-  SVGForm.text = function(ctx, pt, txt, maxWidth, dx, dy) {
-    var elem;
-    if (maxWidth == null) {
-      maxWidth = 0;
-    }
-    if (dx == null) {
-      dx = 0;
-    }
-    if (dy == null) {
-      dy = 0;
-    }
-    elem = SVGSpace.svgElement(ctx.group, "text", SVGForm.id(ctx));
-    if (!elem) {
-      return;
-    }
-    DOMSpace.attr(elem, {
-      "pointer-events": "none",
-      x: pt.x,
-      y: pt.y,
-      dx: 0,
-      dy: 0
-    });
-    elem.textContent = txt;
-    SVGForm.style(elem, {
-      fill: ctx.style.fill,
-      stroke: ctx.style.stroke,
-      "font-family": ctx.fontFace || false,
-      "font-size": ctx.fontSize || false
-    });
-    return elem;
-  };
-
-  SVGForm.prototype.text = function(p, txt, maxWidth, xoff, yoff) {
-    if (maxWidth == null) {
-      maxWidth = 1000;
-    }
-    this.nextID();
-    SVGForm.text(this.cc, p, txt, maxWidth, xoff, yoff);
-    return this;
-  };
-
-  SVGForm.prototype.font = function(size, face) {
-    if (face == null) {
-      face = false;
-    }
-    this.cc.fontFace = face;
-    this.cc.fontSize = size;
-    this.cc.font = size + "px " + face;
-    return this;
-  };
-
-  SVGForm.prototype.draw = function(shape) {
-    return this.sketch(shape);
-  };
-
-  SVGForm.prototype.sketch = function(shape) {
-    shape.floor();
-    if (shape instanceof Circle) {
-      SVGForm.circle(this.cc, shape, this.filled, this.stroked);
-    } else if (shape instanceof Rectangle) {
-      SVGForm.rect(this.cc, shape, this.filled, this.stroked);
-    } else if (shape instanceof Triangle) {
-      SVGForm.triangle(this.cc, shape, this.filled, this.stroked);
-    } else if (shape instanceof Line || shape instanceof Pair) {
-      SVGForm.line(this.cc, shape);
-    } else if (shape instanceof PointSet) {
-      SVGForm.polygon(this.cc, shape.points);
-    } else if (shape instanceof Vector || shape instanceof Point) {
-      SVGForm.point(this.cc, shape);
-    }
-    return this;
-  };
-
-  return SVGForm;
-
-})();
-
-this.SVGForm = SVGForm;
-
-SVGSpace = (function(superClass) {
-  extend(SVGSpace, superClass);
-
-  function SVGSpace(id, bgcolor, context) {
-    if (id == null) {
-      id = 'pt_space';
-    }
-    if (bgcolor == null) {
-      bgcolor = false;
-    }
-    if (context == null) {
-      context = 'svg';
-    }
-    SVGSpace.__super__.constructor.apply(this, arguments);
-    this.bg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-    this.bg.setAttribute("id", id + "_bg");
-    this.bg.setAttribute("fill", bgcolor);
-    this.space.appendChild(this.bg);
-  }
-
-  SVGSpace.prototype._createSpaceElement = function() {
-    this.space = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    this.space.setAttribute("id", this.id);
-    return this.appended = false;
-  };
-
-  SVGSpace.svgElement = function(parent, name, id) {
-    var elem;
-    if (!parent || !parent.appendChild) {
-      throw "parent parameter needs to be a DOM node";
-    }
-    elem = document.querySelector("#" + id);
-    if (!elem) {
-      elem = document.createElementNS("http://www.w3.org/2000/svg", name);
-      elem.setAttribute("id", id);
-      elem.setAttribute("class", id.substring(0, id.indexOf("-")));
-      parent.appendChild(elem);
-    }
-    return elem;
-  };
-
-  SVGSpace.prototype.resize = function(w, h, evt) {
-    var k, p, ref;
-    this.size.set(w, h);
-    this.center = new Vector(w / 2, h / 2);
-    this.space.setAttribute("width", w);
-    this.space.setAttribute("height", h);
-    this.bg.setAttribute("width", w);
-    this.bg.setAttribute("height", h);
-    ref = this.items;
-    for (k in ref) {
-      p = ref[k];
-      if (p.onSpaceResize != null) {
-        p.onSpaceResize(w, h, evt);
-      }
-    }
-    return this;
-  };
-
-  SVGSpace.prototype.remove = function(item) {
-    var aa, len1, t, temp;
-    temp = this.space.querySelectorAll("." + SVGForm._scopeID(item));
-    for (aa = 0, len1 = temp.length; aa < len1; aa++) {
-      t = temp[aa];
-      t.parentNode.removeChild(t);
-    }
-    delete this.items[item.animateID];
-    return this;
-  };
-
-  SVGSpace.prototype.removeAll = function() {
-    while (this.space.firstChild) {
-      this.space.removeChild(this.space.firstChild);
-      return this;
-    }
-  };
-
-  return SVGSpace;
-
-})(DOMSpace);
-
-this.SVGSpace = SVGSpace;
-
-Easing = (function() {
-  function Easing() {}
-
-  Easing.linear = function(t, b, c, d) {
-    return c * (t /= d) + b;
-  };
-
-  Easing._linear = function(t) {
-    return Easing.linear(t, 0, 1, 1);
-  };
-
-  Easing.quadIn = function(t, b, c, d) {
-    return c * (t /= d) * t + b;
-  };
-
-  Easing._quadIn = function(t) {
-    return Easing.quadIn(t, 0, 1, 1);
-  };
-
-  Easing.quadOut = function(t, b, c, d) {
-    return -c * (t /= d) * (t - 2) + b;
-  };
-
-  Easing._quadOut = function(t) {
-    return Easing.quadOut(t, 0, 1, 1);
-  };
-
-  Easing.cubicIn = function(t, b, c, d) {
-    t = t / d;
-    return c * t * t * t + b;
-  };
-
-  Easing._cubicIn = function(t) {
-    return Easing.cubicIn(t, 0, 1, 1);
-  };
-
-  Easing.cubicOut = function(t, b, c, d) {
-    t = t / d;
-    return c * ((t - 1) * t * t + 1) + b;
-  };
-
-  Easing._cubicOut = function(t) {
-    return Easing.cubicOut(t, 0, 1, 1);
-  };
-
-  Easing.elastic = function(t, b, c, d, el) {
-    var a, p, s;
-    if (el == null) {
-      el = 0.3;
-    }
-    s = 1.70158;
-    p = d * el;
-    a = c;
-    if (t === 0) {
-      return b;
-    }
-    t = t / d;
-    if (t === 1) {
-      return b + c;
-    }
-    if (a < Math.abs(c)) {
-      a = c;
-      s = p / 4;
-    } else if (a !== 0) {
-      s = p / Const.two_pi * Math.asin(c / a);
-    } else {
-      s = 0;
-    }
-    return a * Math.pow(2, -10 * t) * Math.sin((t * d - s) * Const.two_pi / p) + c + b;
-  };
-
-  Easing._elastic = function(t) {
-    return Easing.elastic(t, 0, 1, 1);
-  };
-
-  Easing.bounce = function(t, b, c, d) {
-    if ((t /= d) < (1 / 2.75)) {
-      return c * (7.5625 * t * t) + b;
-    } else if (t < (2 / 2.75)) {
-      return c * (7.5625 * (t -= 1.5 / 2.75) * t + 0.75) + b;
-    } else if (t < (2.5 / 2.75)) {
-      return c * (7.5625 * (t -= 2.25 / 2.75) * t + 0.9375) + b;
-    } else {
-      return c * (7.5625 * (t -= 2.625 / 2.75) * t + 0.984375) + b;
-    }
-  };
-
-  Easing._bounce = function(t) {
-    return Easing.bounce(t, 0, 1, 1);
-  };
-
-  return Easing;
-
-})();
-
-this.Easing = Easing;
-
 GridCascade = (function(superClass) {
   extend(GridCascade, superClass);
 
@@ -5920,7 +5910,7 @@ Noise = (function(superClass) {
     return g[0] * x + g[1] * y;
   };
 
-  Noise.prototype.perlin2d = function(xin, yin) {
+  Noise.prototype.perlin2D = function(xin, yin) {
     var _fade, i, j, n00, n01, n10, n11, tx, x, y;
     if (xin == null) {
       xin = this.x;
@@ -5943,7 +5933,7 @@ Noise = (function(superClass) {
     return Util.lerp(Util.lerp(n00, n10, tx), Util.lerp(n01, n11, tx), _fade(y));
   };
 
-  Noise.prototype.simplex2d = function(xin, yin) {
+  Noise.prototype.simplex2D = function(xin, yin) {
     var F2, G2, X0, Y0, gi0, gi1, gi2, i, i1, ii, j, j1, jj, n0, n1, n2, s, t, t0, t1, t2, x0, x1, x2, y0, y1, y2;
     if (xin == null) {
       xin = this.x;
@@ -6134,5 +6124,348 @@ Delaunay = (function(superClass) {
 })(PointSet);
 
 this.Delaunay = Delaunay;
+
+Shaping = (function() {
+  function Shaping() {}
+
+  Shaping.linear = function(t, c) {
+    if (c == null) {
+      c = 1;
+    }
+    return c * t;
+  };
+
+  Shaping.quadraticIn = function(t, c) {
+    if (c == null) {
+      c = 1;
+    }
+    return c * t * t;
+  };
+
+  Shaping.quadraticOut = function(t, c) {
+    if (c == null) {
+      c = 1;
+    }
+    return -c * t * (t - 2);
+  };
+
+  Shaping.quadraticInOut = function(t, c) {
+    var dt;
+    if (c == null) {
+      c = 1;
+    }
+    dt = t * 2;
+    if (t < 0.5) {
+      return c / 2 * t * t * 4;
+    } else {
+      return -c / 2 * ((dt - 1) * (dt - 3) - 1);
+    }
+  };
+
+  Shaping.cubicIn = function(t, c) {
+    if (c == null) {
+      c = 1;
+    }
+    return c * t * t * t;
+  };
+
+  Shaping.cubicOut = function(t, c) {
+    var dt;
+    if (c == null) {
+      c = 1;
+    }
+    dt = t - 1;
+    return c * (dt * dt * dt + 1);
+  };
+
+  Shaping.cubicInOut = function(t, c) {
+    var dt;
+    if (c == null) {
+      c = 1;
+    }
+    dt = t * 2;
+    if (t < 0.5) {
+      return c / 2 * dt * dt * dt;
+    } else {
+      return c / 2 * ((dt - 2) * (dt - 2) * (dt - 2) + 2);
+    }
+  };
+
+  Shaping.exponentialIn = function(t, c, p) {
+    if (c == null) {
+      c = 1;
+    }
+    if (p == null) {
+      p = 0.25;
+    }
+    return c * Math.pow(t, 1 / p);
+  };
+
+  Shaping.exponentialOut = function(t, c, p) {
+    if (c == null) {
+      c = 1;
+    }
+    if (p == null) {
+      p = 0.25;
+    }
+    return c * Math.pow(t, p);
+  };
+
+  Shaping.sineIn = function(t, c) {
+    if (c == null) {
+      c = 1;
+    }
+    return -c * Math.cos(t * Const.half_pi) + c;
+  };
+
+  Shaping.sineOut = function(t, c) {
+    if (c == null) {
+      c = 1;
+    }
+    return c * Math.sin(t * Const.half_pi);
+  };
+
+  Shaping.sineInOut = function(t, c) {
+    if (c == null) {
+      c = 1;
+    }
+    return -c / 2 * (Math.cos(Math.PI * t) - 1);
+  };
+
+  Shaping.cosineApprox = function(t, c) {
+    var t2, t4, t6;
+    if (c == null) {
+      c = 1;
+    }
+    t2 = t * t;
+    t4 = t2 * t2;
+    t6 = t4 * t2;
+    return c * (4 * t6 / 9 - 17 * t4 / 9 + 22 * t2 / 9);
+  };
+
+  Shaping.circularIn = function(t, c) {
+    if (c == null) {
+      c = 1;
+    }
+    return -c * (Math.sqrt(1 - t * t) - 1);
+  };
+
+  Shaping.circularOut = function(t, c) {
+    var dt;
+    if (c == null) {
+      c = 1;
+    }
+    dt = t - 1;
+    return c * Math.sqrt(1 - dt * dt);
+  };
+
+  Shaping.circularInOut = function(t, c) {
+    var dt;
+    if (c == null) {
+      c = 1;
+    }
+    dt = t * 2;
+    if (t < 0.5) {
+      return -c / 2 * (Math.sqrt(1 - dt * dt) - 1);
+    } else {
+      return c / 2 * (Math.sqrt(1 - (dt - 2) * (dt - 2)) + 1);
+    }
+  };
+
+  Shaping.elasticIn = function(t, c, p) {
+    var dt, s;
+    if (c == null) {
+      c = 1;
+    }
+    if (p == null) {
+      p = 0.7;
+    }
+    dt = t - 1;
+    s = (p / Const.two_pi) * 1.5707963267948966;
+    return c * (-Math.pow(2, 10 * dt) * Math.sin((dt - s) * Const.two_pi / p));
+  };
+
+  Shaping.elasticOut = function(t, c, p) {
+    var s;
+    if (c == null) {
+      c = 1;
+    }
+    if (p == null) {
+      p = 0.7;
+    }
+    s = (p / Const.two_pi) * 1.5707963267948966;
+    return c * (Math.pow(2, -10 * t) * Math.sin((t - s) * Const.two_pi / p)) + c;
+  };
+
+  Shaping.elasticInOut = function(t, c, p) {
+    var dt, s;
+    if (c == null) {
+      c = 1;
+    }
+    if (p == null) {
+      p = 0.6;
+    }
+    dt = t * 2;
+    s = (p / Const.two_pi) * 1.5707963267948966;
+    if (t < 0.5) {
+      dt -= 1;
+      return c * (-0.5 * (Math.pow(2, 10 * dt) * Math.sin((dt - s) * Const.two_pi / p)));
+    } else {
+      dt -= 1;
+      return c * (0.5 * (Math.pow(2, -10 * dt) * Math.sin((dt - s) * Const.two_pi / p))) + c;
+    }
+  };
+
+  Shaping.bounceIn = function(t, c) {
+    if (c == null) {
+      c = 1;
+    }
+    return c - Shaping.bounceOut(1 - t, c);
+  };
+
+  Shaping.bounceOut = function(t, c) {
+    if (c == null) {
+      c = 1;
+    }
+    if (t < (1 / 2.75)) {
+      return c * (7.5625 * t * t);
+    } else if (t < (2 / 2.75)) {
+      t -= 1.5 / 2.75;
+      return c * (7.5625 * t * t + 0.75);
+    } else if (t < (2.5 / 2.75)) {
+      t -= 2.25 / 2.75;
+      return c * (7.5625 * t * t + 0.9375);
+    } else {
+      t -= 2.625 / 2.75;
+      return c * (7.5625 * t * t + 0.984375);
+    }
+  };
+
+  Shaping.bounceInOut = function(t, c) {
+    if (c == null) {
+      c = 1;
+    }
+    if (t < 0.5) {
+      return Shaping.bounceIn(t * 2, c) / 2;
+    } else {
+      return Shaping.bounceOut(t * 2 - 1, c) / 2 + c / 2;
+    }
+  };
+
+  Shaping.sigmoid = function(t, c, p) {
+    var d;
+    if (c == null) {
+      c = 1;
+    }
+    if (p == null) {
+      p = 10;
+    }
+    d = p * (t - 0.5);
+    return c / (1 + Math.exp(-d));
+  };
+
+  Shaping.logSigmoid = function(t, c, p) {
+    var A, B, C;
+    if (c == null) {
+      c = 1;
+    }
+    if (p == null) {
+      p = 0.7;
+    }
+    p = Math.max(Const.epsilon, Math.min(1 - Const.epsilon, p));
+    p = 1 / (1 - p);
+    A = 1 / (1 + Math.exp((t - 0.5) * p * -2));
+    B = 1 / (1 + Math.exp(p));
+    C = 1 / (1 + Math.exp(-p));
+    return c * (A - B) / (C - B);
+  };
+
+  Shaping.seat = function(t, c, p) {
+    if (c == null) {
+      c = 1;
+    }
+    if (p == null) {
+      p = 0.5;
+    }
+    if (t < 0.5) {
+      return c * (Math.pow(2 * t, 1 - p)) / 2;
+    } else {
+      return c * (1 - (Math.pow(2 * (1 - t), 1 - p)) / 2);
+    }
+  };
+
+  Shaping.quadraticBezier = function(t, c, p) {
+    var a, b, d, om2a;
+    if (c == null) {
+      c = 1;
+    }
+    if (p == null) {
+      p = new Point(0.05, 0.95);
+    }
+    a = p.x ? p.x : p;
+    b = p.y ? p.y : 0.5;
+    om2a = 1 - 2 * a;
+    if (om2a === 0) {
+      om2a = Const.epsilon;
+    }
+    d = (Math.sqrt(a * a + om2a * t) - a) / om2a;
+    return c * ((1 - 2 * b) * (d * d) + (2 * b) * d);
+  };
+
+  Shaping.cubicBezier = function(t, c, p1, p2) {
+    var curve;
+    if (c == null) {
+      c = 1;
+    }
+    if (p1 == null) {
+      p1 = new Point(0.1, 0.7);
+    }
+    if (p2 == null) {
+      p2 = new Point(0.9, 0.2);
+    }
+    curve = new Curve().to([new Point(0, 0), p1, p2, new Point(1, 1)]);
+    return c * curve.bezierPoint([t, t * t, t * t * t], curve.controlPoints()).y;
+  };
+
+  Shaping.quadraticTarget = function(t, c, p1) {
+    var A, B, a, b, y;
+    if (c == null) {
+      c = 1;
+    }
+    if (p1 == null) {
+      p1 = new Point(0.2, 0.35);
+    }
+    a = Math.min(1 - Const.epsilon, Math.max(Const.epsilon, p1.x));
+    b = Math.min(1, Math.max(0, p1.y));
+    A = (1 - b) / (1 - a) - (b / a);
+    B = (A * (a * a) - b) / a;
+    y = A * (t * t) - B * t;
+    return c * Math.min(1, Math.max(0, y));
+  };
+
+  Shaping.cliff = function(t, c, p) {
+    if (c == null) {
+      c = 1;
+    }
+    if (p == null) {
+      p = 0.5;
+    }
+    if (t > p) {
+      return c;
+    } else {
+      return 0;
+    }
+  };
+
+  Shaping.step = function(fn, steps, t, c, p1, p2) {
+    var s, tt;
+    s = 1 / steps;
+    tt = Math.floor(t / s) * s;
+    return fn(tt, c, p1, p2);
+  };
+
+  return Shaping;
+
+})();
 
 //# sourceMappingURL=pt.js.map

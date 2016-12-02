@@ -1,7 +1,7 @@
 var canvas = {
   id: "pt",
-  x: 500,
-  y: 500
+  x: 1300,
+  y: 920
 }
 
 document.getElementById(canvas.id).style.width = canvas.x + "px";
@@ -20,12 +20,12 @@ function moveTo(vector, angle, distance) {
   return new Vector(x, y, 0);
 }
 
-var dotSize = 3;
-var triSize = dotSize * 1.4;
+var dotSize = 10;
+var triSize = dotSize * 5;
 
-var triTop = new Vector(moveTo(canvas.center, -90, triSize));
-var triLeft = new Vector(moveTo(canvas.center, 30, triSize))
-var triRight = new Vector(moveTo(canvas.center, 150, triSize))
+var triTop = new Vector(moveTo(canvas.center, 0, triSize));
+var triLeft = new Vector(moveTo(canvas.center, 0, triSize))
+var triRight = new Vector(moveTo(canvas.center, 0, triSize))
 
 var mouseCords = {
   x: 0,
@@ -34,11 +34,11 @@ var mouseCords = {
 
 var draw = {
   animate: function(time, fs, context) {
-    form.stroke("#d0d0d0", 2);
+    form.stroke("#d0d0d0", 5);
     form.line(new Line(triTop).to(moveTo(triTop, -90, triSize * 3)));
-    form.stroke("#d0d0d0", 2);
+    form.stroke("#d0d0d0", 5);
     form.line(new Line(triLeft).to(moveTo(triLeft, 30, triSize * 3)));
-    form.stroke("#d0d0d0", 2);
+    form.stroke("#d0d0d0", 5);
     form.line(new Line(triRight).to(moveTo(triRight, 150, triSize * 3)));
 
     form.fill("#24F").stroke();
